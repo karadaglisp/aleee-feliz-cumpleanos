@@ -160,9 +160,6 @@
             <h1 class="font-handwriting text-5xl md:text-6xl text-rose-500 mb-4 font-bold">
                 ¡Hola Ale!
             </h1>
-            <p class="text-lg md:text-xl text-gray-700 font-medium">
-                I didn't know where to send you a gift, so here's a virtual one...
-            </p>
             <p id="instruction-text" class="text-sm text-gray-400 mt-4 animate-pulse">Tap the envelope to open</p>
         </div>
 
@@ -292,14 +289,9 @@
             </div>
         </div>
         
-        <!-- Mobile D-Pad (Anchored to bottom for easy thumb access) -->
-        <div class="absolute bottom-8 left-1/2 transform -translate-x-1/2 grid grid-cols-3 gap-3 md:hidden z-40 w-64 touch-none">
-            <div></div>
-            <button id="btn-up" class="w-full aspect-square bg-gray-800 bg-opacity-80 rounded-2xl flex justify-center items-center text-white text-3xl shadow-lg active:bg-gray-600 transition-all select-none border-2 border-gray-700 backdrop-blur-sm">▲</button>
-            <div></div>
-            <button id="btn-left" class="w-full aspect-square bg-gray-800 bg-opacity-80 rounded-2xl flex justify-center items-center text-white text-3xl shadow-lg active:bg-gray-600 transition-all select-none border-2 border-gray-700 backdrop-blur-sm">◀</button>
-            <button id="btn-down" class="w-full aspect-square bg-gray-800 bg-opacity-80 rounded-2xl flex justify-center items-center text-white text-3xl shadow-lg active:bg-gray-600 transition-all select-none border-2 border-gray-700 backdrop-blur-sm">▼</button>
-            <button id="btn-right" class="w-full aspect-square bg-gray-800 bg-opacity-80 rounded-2xl flex justify-center items-center text-white text-3xl shadow-lg active:bg-gray-600 transition-all select-none border-2 border-gray-700 backdrop-blur-sm">▶</button>
+        <!-- Mobile Virtual Joystick -->
+        <div id="joystick-zone" class="absolute bottom-10 left-1/2 transform -translate-x-1/2 w-32 h-32 bg-gray-800 bg-opacity-60 rounded-full md:hidden z-40 touch-none flex items-center justify-center border-4 border-gray-700 backdrop-blur-sm shadow-2xl">
+            <div id="joystick-knob" class="w-14 h-14 bg-rose-500 rounded-full shadow-lg border-2 border-rose-400 absolute z-50"></div>
         </div>
         
         <div id="victory-screen" class="absolute inset-0 bg-black bg-opacity-90 hidden flex-col items-center justify-start text-center p-6 z-50 overflow-y-auto">
@@ -472,6 +464,23 @@
         </div>
     </div>
 
+    <!-- SAVE STICKER MODAL (For Instagram/Mobile Fallback) -->
+    <div id="save-modal" class="fixed inset-0 bg-black bg-opacity-90 z-[60] hidden flex-col items-center justify-center p-6 text-center backdrop-blur-sm">
+        <div class="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl transform transition-all pointer-events-auto">
+            <h3 class="text-3xl font-bold text-rose-500 mb-2 font-handwriting">Save Your Gift!</h3>
+            <p class="text-sm text-gray-600 mb-4">If the download didn't start automatically (Instagram blocks downloads), <strong>press and hold</strong> the image below to save it to your photos.</p>
+            
+            <div class="bg-gray-100 rounded-xl p-4 mb-6 flex justify-center items-center h-48 border-2 border-dashed border-gray-300">
+                <!-- IMPORTANT: -webkit-touch-callout: default allows long-press menu on iOS Safari/Instagram -->
+                <img id="save-modal-img" src="" alt="Sticker" class="max-h-full max-w-full drop-shadow-xl pointer-events-auto select-none" style="-webkit-touch-callout: default;">
+            </div>
+            
+            <button onclick="document.getElementById('save-modal').style.display='none'" class="bg-rose-500 hover:bg-rose-600 text-white font-bold py-3 px-6 rounded-full w-full transition-colors">
+                Done
+            </button>
+        </div>
+    </div>
+
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const envelope = document.getElementById('envelope');
@@ -522,6 +531,10 @@
             let inCombat = false;
             let combatState = { enemyHp: 100, playerHp: 100, myTurn: true };
             
+            // Joystick state
+            let joyActive = false;
+            let joyVec = { x: 0, y: 0 };
+            
             const WORLD_WIDTH = 1200;
             const WORLD_HEIGHT = 1200;
             const camera = { x: 0, y: 0 };
@@ -561,17 +574,60 @@
                 if (gameActive && keys.hasOwnProperty(e.code)) keys[e.code] = false;
             });
 
-            // Mobile Touch Listeners (optimized for Instagram browser)
-            function bindBtn(id, keyStr1, keyStr2) {
-                const btn = document.getElementById(id);
-                if(!btn) return;
-                const press = (e) => { if(inCombat) return; e.preventDefault(); keys[keyStr1] = true; keys[keyStr2] = true; };
-                const release = (e) => { e.preventDefault(); keys[keyStr1] = false; keys[keyStr2] = false; };
-                btn.addEventListener('mousedown', press); btn.addEventListener('mouseup', release); btn.addEventListener('mouseleave', release);
-                btn.addEventListener('touchstart', press, {passive: false}); btn.addEventListener('touchend', release, {passive: false});
+            // Mobile Joystick Listeners (optimized for Instagram browser)
+            const joystickZone = document.getElementById('joystick-zone');
+            const joystickKnob = document.getElementById('joystick-knob');
+            
+            if (joystickZone && joystickKnob) {
+                let center = { x: 0, y: 0 };
+                const maxRadius = 40; // Max drag distance for the knob
+
+                const updateJoy = (e) => {
+                    if (!joyActive || inCombat) return;
+                    e.preventDefault();
+                    let touch = e.targetTouches[0] || e.changedTouches[0];
+                    let dx = touch.clientX - center.x;
+                    let dy = touch.clientY - center.y;
+                    let dist = Math.hypot(dx, dy);
+
+                    // Constrain knob within the circle
+                    if (dist > maxRadius) {
+                        dx = (dx / dist) * maxRadius;
+                        dy = (dy / dist) * maxRadius;
+                    }
+
+                    // Remove transitions so it follows finger instantly
+                    joystickKnob.style.transition = 'none';
+                    joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+                    
+                    // Normalize vector for physics engine (-1 to 1)
+                    joyVec.x = dx / maxRadius;
+                    joyVec.y = dy / maxRadius;
+                };
+
+                joystickZone.addEventListener('touchstart', (e) => {
+                    if (inCombat) return;
+                    e.preventDefault();
+                    joyActive = true;
+                    const rect = joystickZone.getBoundingClientRect();
+                    center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                    updateJoy(e);
+                }, { passive: false });
+
+                joystickZone.addEventListener('touchmove', updateJoy, { passive: false });
+
+                const endJoy = (e) => {
+                    e.preventDefault();
+                    joyActive = false;
+                    joyVec = { x: 0, y: 0 };
+                    // Add bouncy transition for when the thumb is released
+                    joystickKnob.style.transition = 'transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                    joystickKnob.style.transform = `translate(0px, 0px)`;
+                };
+
+                joystickZone.addEventListener('touchend', endJoy, { passive: false });
+                joystickZone.addEventListener('touchcancel', endJoy, { passive: false });
             }
-            bindBtn('btn-up', 'ArrowUp', 'KeyW'); bindBtn('btn-down', 'ArrowDown', 'KeyS');
-            bindBtn('btn-left', 'ArrowLeft', 'KeyA'); bindBtn('btn-right', 'ArrowRight', 'KeyD');
 
             function generateEnvironment() {
                 environment = [];
@@ -848,7 +904,7 @@
                 
                 updateCombatUI();
                 logCombat("A wild Responsibilities Monster blocks the way!");
-                setTimeout(() => { if (inCombat) logCombat("What will Ale do?"); }, 2000);
+                setTimeout(() => { if (inCombat) logCombat("What will Ale do?"); }, 3000);
             }
 
             function logCombat(text) { document.getElementById('combat-dialogue').innerText = text; }
@@ -867,19 +923,19 @@
                 if (action === 'sushi') { logCombat("Ale used Sushi Strike! It's super effective!"); combatState.enemyHp -= 40; } 
                 else if (action === 'smarties') { logCombat("Ale ate Smarties! Restored 50 HP."); combatState.playerHp = Math.min(100, combatState.playerHp + 50); } 
                 else if (action === 'spanish') { logCombat("Ale yelled '¡Madre mía!' Monster is intimidated!"); combatState.enemyHp -= 25; } 
-                else if (action === 'run') { logCombat("You can't run from a trip to Greece!"); setTimeout(() => { combatState.myTurn = true; logCombat("Choose an action!"); }, 1500); return; }
+                else if (action === 'run') { logCombat("You can't run from a trip to Greece!"); setTimeout(() => { combatState.myTurn = true; logCombat("Choose an action!"); }, 3000); return; }
                 
                 updateCombatUI();
-                if (combatState.enemyHp <= 0) { setTimeout(() => winCombat(), 1500); return; }
-                setTimeout(() => enemyTurn(), 1500);
+                if (combatState.enemyHp <= 0) { setTimeout(() => winCombat(), 3000); return; }
+                setTimeout(() => enemyTurn(), 3000);
             }
             
             function enemyTurn() {
                 logCombat("Monster used 'Routine Schedule'! It's boring!");
                 combatState.playerHp -= 30;
                 updateCombatUI();
-                if (combatState.playerHp <= 0) { setTimeout(() => loseCombat(), 1500); return; }
-                setTimeout(() => { logCombat("What will Ale do?"); combatState.myTurn = true; }, 1500);
+                if (combatState.playerHp <= 0) { setTimeout(() => loseCombat(), 3000); return; }
+                setTimeout(() => { logCombat("What will Ale do?"); combatState.myTurn = true; }, 3000);
             }
             
             function winCombat() {
@@ -892,12 +948,12 @@
                     targetDisplay.innerText = "Grab the Golden Ticket! 🎫";
                     targetDisplay.classList.add('text-yellow-400', 'animate-bounce-slow');
                     targetDisplay.classList.remove('text-rose-400');
-                }, 1500);
+                }, 3000);
             }
             
             function loseCombat() {
                 logCombat("Ale got too tired... Let's try again!");
-                setTimeout(() => { document.getElementById('combat-overlay').style.display = 'none'; initGame(); }, 1500);
+                setTimeout(() => { document.getElementById('combat-overlay').style.display = 'none'; initGame(); }, 3000);
             }
 
             function canMove(nx, ny) {
@@ -944,6 +1000,12 @@
                     if (keys.ArrowDown || keys.KeyS) player.vy += player.accel;
                     if (keys.ArrowLeft || keys.KeyA) player.vx -= player.accel;
                     if (keys.ArrowRight || keys.KeyD) player.vx += player.accel;
+
+                    // Add joystick analog movement
+                    if (joyActive) {
+                        player.vx += joyVec.x * player.accel;
+                        player.vy += joyVec.y * player.accel;
+                    }
 
                     player.vx *= player.friction;
                     player.vy *= player.friction;
@@ -1127,6 +1189,7 @@
                 player.x = 750; player.y = 800; player.vx = 0; player.vy = 0;
                 walkCycle = 0; facingRight = true;
                 Object.keys(keys).forEach(k => keys[k] = false);
+                joyActive = false; joyVec = { x: 0, y: 0 };
                 
                 generateEnvironment();
                 
@@ -1172,31 +1235,64 @@
             });
         });
 
+        // UPDATED DOWNLOAD LOGIC FOR IN-APP BROWSERS
         function downloadSticker(svgId, fileName) {
+            const btn = event.target;
+            const originalText = btn.innerText;
+            btn.innerText = "Processing...";
+            
             const svgElement = document.getElementById(svgId);
             const serializer = new XMLSerializer();
             let svgString = serializer.serializeToString(svgElement);
+            
             if (!svgString.match(/^<svg[^>]+xmlns="http\:\/\/www\.w3\.org\/2000\/svg"/)) {
                 svgString = svgString.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
             }
-            const blob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-            const url = URL.createObjectURL(blob);
-            const link = document.createElement("a");
-            link.href = url;
-            link.download = fileName;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            URL.revokeObjectURL(url);
+
+            // Create canvas for high-res PNG conversion
+            const canvas = document.createElement('canvas');
+            canvas.width = 1200; 
+            canvas.height = 1200 * (svgElement.viewBox.baseVal.height / svgElement.viewBox.baseVal.width);
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
             
-            const btn = event.target;
-            const originalText = btn.innerText;
-            btn.innerText = "Downloaded! ✓";
-            btn.classList.add('bg-green-500', 'hover:bg-green-600');
-            setTimeout(() => {
-                btn.innerText = originalText;
-                btn.classList.remove('bg-green-500', 'hover:bg-green-600');
-            }, 2000);
+            img.onload = function() {
+                // Draw SVG onto canvas
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                
+                // Convert to PNG Data URL
+                const pngDataUrl = canvas.toDataURL('image/png');
+                
+                // 1. Attempt standard programmatic download (Works on Desktop/Safari/Chrome)
+                try {
+                    const link = document.createElement("a");
+                    link.href = pngDataUrl;
+                    link.download = fileName.replace('.svg', '.png'); // Force PNG for camera roll compatibility
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                } catch(e) { console.log("Standard download blocked by browser."); }
+                
+                // 2. Show Mobile Fallback Modal (Works instantly inside Instagram)
+                const modal = document.getElementById('save-modal');
+                document.getElementById('save-modal-img').src = pngDataUrl;
+                modal.classList.remove('hidden');
+                modal.style.display = 'flex';
+                
+                // Reset button UI
+                btn.innerText = "Downloaded! ✓";
+                btn.classList.add('bg-green-500', 'hover:bg-green-600', 'text-white');
+                btn.classList.remove('bg-gray-800');
+                
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.classList.add('bg-gray-800');
+                    btn.classList.remove('bg-green-500', 'hover:bg-green-600', 'text-white');
+                }, 2000);
+            };
+            
+            // Convert SVG string to Base64 to load into image tag safely (handles emojis/special chars)
+            img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgString)));
         }
     </script>
 </body>
